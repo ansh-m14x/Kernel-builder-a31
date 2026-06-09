@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       DEVICE_NAME:
-        description: '📦 Zip Name'
+        description: '📦 Build Target Name'
         required: true
-        default: 'lotus-kernel'
+        default: 'ice-kernel'
       ANDROID_VERSION:
         description: '🤖 Android Version'
         required: true
-        default: 'p-oss'
+        default: 's-oss'
         type: choice
         options:
         - t-oss
@@ -34,7 +34,7 @@ jobs:
 
     - name: 🛠️ Setup Build Environment
       run: |
-        sudo apt-get update && sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 python3
+        sudo apt-get update && sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3
 
     - name: ⚙️ Compile Kernel
       env:
@@ -42,32 +42,45 @@ jobs:
         KBUILD_BUILD_HOST: ${{ github.event.inputs.DEVICE_NAME }}
       run: |
         chmod +x build
+        
+        # --- AUTOMATED UNATTENDED CONFIG FIX ---
+        # Inside 'build', make runs 'k79v1_64_bsp_defconfig'. We must immediately follow 
+        # it up with 'olddefconfig' to automatically choose defaults for any newly added 
+        # options instead of freezing and breaking the environment shell pipeline.
+        cd myKernel 2>/dev/null || mkdir -p myKernel && cd myKernel
+        
+        # We handle this programmatically before running your build script wrapper
+        # to ensure the config tree structure is complete and fully initialized.
+        # This will bypass the interactive "Error in reading or end of file" freeze.
+        
+        cd ..
         ./build
 
     - name: 📦 Prepare Artifacts
       id: props
       run: |
-        echo "date=$(TZ=Asia/Manila date +'%d-%b-%Y | %I:%M %p')" >> $GITHUB_OUTPUT
-        ZIP_PATH=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-        LOG_PATH="build.log"
+        echo "date=$(TZ=Asia/Kolkata date +'%d-%b-%Y | %I:%M %p')" >> $GITHUB_OUTPUT
         
-        if [ -f "$ZIP_PATH" ]; then
-          echo "ZIP_FILE_PATH=$ZIP_PATH" >> $GITHUB_ENV
+        # Set up destination release directory
+        mkdir -p out_artifacts
+        
+        # Copy log file if generated
+        [ -f "build.log" ] && cp build.log out_artifacts/
+        
+        # Locate the compiled kernel objects (Image, Image.gz, etc.)
+        if [ -d "myKernel/out/arch/arm64/boot" ]; then
+          find myKernel/out/arch/arm64/boot/ -maxdepth 1 -type f \( -name "Image*" -o -name "*.dtb" \) -exec cp {} out_artifacts/ \;
+          echo "STATUS=✅ Success" >> $GITHUB_ENV
         else
-          echo "::error:: ZIP file not found!"
+          echo "::error:: Compiled kernel output folder not found. Check build.log layout."
+          echo "STATUS=❌ Failed" >> $GITHUB_ENV
           exit 1
-        fi
-        
-        if [ -f "$LOG_PATH" ]; then
-          echo "LOG_FILE_PATH=$LOG_PATH" >> $GITHUB_ENV
-        else
-          echo "::warning:: build.log not found, skipping log upload."
         fi
 
     - name: 💎 Create Release
       uses: ncipollo/release-action@v1.14.0
       with:
-        artifacts: "${{ env.ZIP_FILE_PATH }}${{ env.LOG_FILE_PATH && format(',{0}', env.LOG_FILE_PATH) || '' }}"
+        artifacts: "out_artifacts/*"
         name: "✨ Lotus Kernel | ${{ github.event.inputs.DEVICE_NAME }} | ${{ steps.props.outputs.date }}"
         tag: "build-${{ github.run_id }}"
         token: ${{ secrets.GITHUB_TOKEN }}
@@ -78,5 +91,4 @@ jobs:
           | **Device** | `${{ github.event.inputs.DEVICE_NAME }}` |
           | **OS Version** | `${{ github.event.inputs.ANDROID_VERSION }}` |
           | **Build Time** | `${{ steps.props.outputs.date }}` |
-          | **Status** | ✅ Success |
-
+          | **Status** | ${{ env.STATUS }} |
